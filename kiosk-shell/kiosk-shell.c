@@ -32,6 +32,7 @@
 #include "kiosk-shell.h"
 #include "kiosk-shell-grab.h"
 #include "compositor/weston.h"
+#include "weston-kiosk-shell-server-protocol.h"
 #include "shared/helpers.h"
 #include "shared/shell-utils.h"
 
@@ -82,6 +83,31 @@ get_kiosk_shell_first_seat(struct kiosk_shell *shell)
 
 	node = compositor->seat_list.next;
 	return container_of(node, struct weston_seat, link);
+}
+
+static void
+wake_handler(struct wl_listener *listener, void *data)
+{
+	struct kiosk_shell *shell =
+		container_of(listener, struct kiosk_shell, wake_listener);
+
+	if (shell->awake) {
+		weston_log("kiosk already awake don't do anything\n");
+		return;
+	}
+
+	shell->awake = true;
+
+	weston_log("kiosk shell wakeup\n");
+
+	weston_compositor_wake(shell->compositor);
+
+	// todo: should send an event
+	/*
+	weston_desktop_shell_send_configure(resource, 0,
+						    surface_resource,
+						    0, 0);
+	*/
 }
 
 static void
@@ -1002,10 +1028,17 @@ kiosk_shell_touch_to_activate_binding(struct weston_touch *touch,
 {
 	struct kiosk_shell *shell = data;
 
+	weston_log("kiosk_shell_touch_to_activate_binding\n");
+
 	if (touch->grab != &touch->default_grab)
 		return;
 	if (touch->focus == NULL)
 		return;
+	if (!shell->awake) {
+		// todo remove this, does probably not get triggered
+		weston_log("touch prevented\n");
+		return;
+	}
 
 	kiosk_shell_activate_view(shell, touch->focus, touch->seat,
 				  WESTON_ACTIVATE_FLAG_NONE);
@@ -1145,10 +1178,79 @@ kiosk_shell_destroy(struct wl_listener *listener, void *data)
 	free(shell);
 }
 
+/*
+ * Kiosk shell api
+ */
+
+static void
+desktop_shell_set_state(struct wl_client *client,
+			     struct wl_resource *resource,
+			     uint32_t state_w)
+{
+	struct kiosk_shell *shell = wl_resource_get_user_data(resource);
+
+	weston_log("DesktopSetState should %d\n", state_w);
+
+	if (state_w == 0) {
+		// already asleep
+		if (!shell->awake)
+			return;
+
+		shell->awake = false;
+
+		weston_compositor_sleep(shell->compositor);
+
+	} else {
+		// already awake
+		if (shell->awake)
+			return;
+
+		shell->awake = true;
+
+		weston_compositor_wake(shell->compositor);
+		
+	}
+
+	weston_log("DesktopSetState has %d\n", state_w);
+}
+
+static const struct weston_kiosk_shell_interface kiosk_shell_implementation = {
+	desktop_shell_set_state
+};
+
+static void
+unbind_kiosk_shell(struct wl_resource *resource)
+{
+	// struct kiosk_shell *shell = wl_resource_get_user_data(resource);
+
+	weston_log("unbind kiosk_shell\n");
+
+}
+
+static void
+bind_kiosk_shell(struct wl_client *client,
+		   void *data, uint32_t version, uint32_t id)
+{
+	struct kiosk_shell *shell = data;
+	struct wl_resource *resource;
+
+	weston_log("bind kiosk_shell\n");
+
+	resource = wl_resource_create(client, &weston_kiosk_shell_interface,
+				      1, id);
+
+	wl_resource_set_implementation(resource,
+				      &kiosk_shell_implementation,
+				      shell, unbind_kiosk_shell);
+
+}
+
 WL_EXPORT int
 wet_shell_init(struct weston_compositor *ec,
 	       int *argc, char *argv[])
 {
+	weston_log("start_weston kiosk\n");
+
 	struct kiosk_shell *shell;
 	struct weston_seat *seat;
 	struct weston_output *output;
@@ -1163,10 +1265,15 @@ wet_shell_init(struct weston_compositor *ec,
 	if (!weston_compositor_add_destroy_listener_once(ec,
 							 &shell->destroy_listener,
 							 kiosk_shell_destroy)) {
+		weston_log("weston_compositor_add_destroy_listener_once failed\n");
 		free(shell);
 		return 0;
 	}
 
+	shell->awake = true;
+
+	shell->wake_listener.notify = wake_handler;
+	wl_signal_add(&ec->wake_signal, &shell->wake_listener);
 	shell->transform_listener.notify = transform_handler;
 	wl_signal_add(&ec->transform_signal, &shell->transform_listener);
 
@@ -1190,6 +1297,15 @@ wet_shell_init(struct weston_compositor *ec,
 					       shell);
 	if (!shell->desktop)
 		return -1;
+
+	weston_log("kiosk: desktop started\n");
+
+
+	if (wl_global_create(ec->wl_display,
+			     &weston_kiosk_shell_interface, 1,
+			     shell, bind_kiosk_shell) == NULL) {
+		return -1;
+	}
 
 	wl_list_init(&shell->seat_list);
 	wl_list_for_each(seat, &ec->seat_list, link)
