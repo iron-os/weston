@@ -47,6 +47,8 @@ struct kiosk_shell {
 	struct wl_list output_list;
 	struct wl_list seat_list;
 
+	struct wl_resource *kiosk_shell;
+
 	bool awake;
 
 	const struct weston_xwayland_surface_api *xwayland_surface_api;

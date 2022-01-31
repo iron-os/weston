@@ -91,23 +91,14 @@ wake_handler(struct wl_listener *listener, void *data)
 	struct kiosk_shell *shell =
 		container_of(listener, struct kiosk_shell, wake_listener);
 
-	if (shell->awake) {
-		weston_log("kiosk already awake don't do anything\n");
+	if (shell->awake)
 		return;
-	}
 
 	shell->awake = true;
 
-	weston_log("kiosk shell wakeup\n");
-
 	weston_compositor_wake(shell->compositor);
 
-	// todo: should send an event
-	/*
-	weston_desktop_shell_send_configure(resource, 0,
-						    surface_resource,
-						    0, 0);
-	*/
+	weston_kiosk_shell_send_state_change(shell->kiosk_shell, 1);
 }
 
 static void
@@ -1028,17 +1019,10 @@ kiosk_shell_touch_to_activate_binding(struct weston_touch *touch,
 {
 	struct kiosk_shell *shell = data;
 
-	weston_log("kiosk_shell_touch_to_activate_binding\n");
-
 	if (touch->grab != &touch->default_grab)
 		return;
 	if (touch->focus == NULL)
 		return;
-	if (!shell->awake) {
-		// todo remove this, does probably not get triggered
-		weston_log("touch prevented\n");
-		return;
-	}
 
 	kiosk_shell_activate_view(shell, touch->focus, touch->seat,
 				  WESTON_ACTIVATE_FLAG_NONE);
@@ -1189,29 +1173,19 @@ desktop_shell_set_state(struct wl_client *client,
 {
 	struct kiosk_shell *shell = wl_resource_get_user_data(resource);
 
-	weston_log("DesktopSetState should %d\n", state_w);
+	bool awake = state_w != 0;
 
-	if (state_w == 0) {
-		// already asleep
-		if (!shell->awake)
-			return;
+	if (shell->awake == awake)
+		return;
 
-		shell->awake = false;
+	shell->awake = awake;
 
+	if (awake)
+		weston_compositor_wake(shell->compositor);
+	else
 		weston_compositor_sleep(shell->compositor);
 
-	} else {
-		// already awake
-		if (shell->awake)
-			return;
-
-		shell->awake = true;
-
-		weston_compositor_wake(shell->compositor);
-		
-	}
-
-	weston_log("DesktopSetState has %d\n", state_w);
+	weston_kiosk_shell_send_state_change(resource, awake ? 1 : 0);
 }
 
 static const struct weston_kiosk_shell_interface kiosk_shell_implementation = {
@@ -1242,6 +1216,9 @@ bind_kiosk_shell(struct wl_client *client,
 	wl_resource_set_implementation(resource,
 				      &kiosk_shell_implementation,
 				      shell, unbind_kiosk_shell);
+
+	// maybe need to ad the resource??
+	shell->kiosk_shell = resource;
 
 }
 
