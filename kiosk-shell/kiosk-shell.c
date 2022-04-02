@@ -1167,7 +1167,7 @@ kiosk_shell_destroy(struct wl_listener *listener, void *data)
  */
 
 static void
-desktop_shell_set_state(struct wl_client *client,
+kiosk_shell_set_state(struct wl_client *client,
 			     struct wl_resource *resource,
 			     uint32_t state_w)
 {
@@ -1188,8 +1188,58 @@ desktop_shell_set_state(struct wl_client *client,
 	weston_kiosk_shell_send_state_change(resource, awake ? 1 : 0);
 }
 
+static void
+kiosk_shell_set_brightness(struct wl_client *client,
+			     struct wl_resource *resource,
+			     uint32_t brightness)
+{
+	struct kiosk_shell *shell = wl_resource_get_user_data(resource);
+
+	weston_log("set brightness\n");
+
+	struct weston_output *output;
+	long backlight_new = brightness;
+
+	/* TODO: we're limiting to simple use cases, where we assume just
+	 * control on the primary display. We'd have to extend later if we
+	 * ever get support for setting backlights on random desktop LCD
+	 * panels though */
+	output = get_default_output(shell->compositor);
+	if (!output) {
+		weston_log("no output\n");
+		return;
+	}
+
+	if (!output->set_backlight) {
+		weston_log("no set_backlight\n");
+		return;
+	}
+
+	if (backlight_new < 5)
+		backlight_new = 5;
+	if (backlight_new > 255)
+		backlight_new = 255;
+
+	output->backlight_current = backlight_new;
+	output->set_backlight(output, output->backlight_current);
+
+	// bool awake = state_w != 0;
+
+	// if (shell->awake == awake)
+	// 	return;
+
+	// shell->awake = awake;
+
+	// if (awake)
+	// 	weston_compositor_wake(shell->compositor);
+	// else
+	// 	weston_compositor_sleep(shell->compositor);
+
+	// weston_kiosk_shell_send_state_change(resource, awake ? 1 : 0);
+}
+
 static const struct weston_kiosk_shell_interface kiosk_shell_implementation = {
-	desktop_shell_set_state
+	kiosk_shell_set_state, kiosk_shell_set_brightness
 };
 
 static void
