@@ -67,6 +67,9 @@ static long backlight_get(struct backlight *backlight, char *node)
 		goto out;
 	}
 
+	if (buffer[ret - 1] == '\n')
+		buffer[ret - 1] = '\0';
+
 	if (!safe_strtoint(buffer, &value)) {
 		ret = -1;
 		goto out;

@@ -1195,8 +1195,6 @@ kiosk_shell_set_brightness(struct wl_client *client,
 {
 	struct kiosk_shell *shell = wl_resource_get_user_data(resource);
 
-	weston_log("set brightness\n");
-
 	struct weston_output *output;
 	long backlight_new = brightness;
 
@@ -1205,20 +1203,18 @@ kiosk_shell_set_brightness(struct wl_client *client,
 	 * ever get support for setting backlights on random desktop LCD
 	 * panels though */
 	output = get_default_output(shell->compositor);
-	if (!output) {
-		weston_log("no output\n");
+	if (!output)
 		return;
-	}
 
-	if (!output->set_backlight) {
-		weston_log("no set_backlight\n");
+	if (!output->set_backlight)
 		return;
-	}
 
 	if (backlight_new < 5)
 		backlight_new = 5;
 	if (backlight_new > 255)
 		backlight_new = 255;
+
+	weston_log("set brightness %d\n", backlight_new);
 
 	output->backlight_current = backlight_new;
 	output->set_backlight(output, output->backlight_current);
