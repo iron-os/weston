@@ -36,6 +36,7 @@ generated_protocols = [
 	[ 'weston-debug', 'internal' ],
 	[ 'weston-desktop-shell', 'internal' ],
 	[ 'weston-output-capture', 'internal' ],
+	[ 'weston-kiosk-shell', 'internal' ],
 	[ 'weston-content-protection', 'internal' ],
 	[ 'weston-test', 'internal' ],
 	[ 'weston-touch-calibration', 'internal' ],
