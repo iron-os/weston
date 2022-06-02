@@ -32,6 +32,7 @@
 #include "kiosk-shell.h"
 #include "kiosk-shell-grab.h"
 #include "compositor/weston.h"
+#include "weston-kiosk-shell-server-protocol.h"
 #include "shared/helpers.h"
 #include "shared/shell-utils.h"
 
@@ -82,6 +83,20 @@ get_kiosk_shell_first_seat(struct kiosk_shell *shell)
 
 	node = compositor->seat_list.next;
 	return container_of(node, struct weston_seat, link);
+}
+
+static void
+wake_handler(struct wl_listener *listener, void *data)
+{
+	struct kiosk_shell *shell =
+		container_of(listener, struct kiosk_shell, wake_listener);
+
+	if (shell->awake)
+		return;
+
+	shell->awake = true;
+
+	weston_kiosk_shell_send_state_change(shell->kiosk_shell, 1);
 }
 
 static void
@@ -1145,10 +1160,105 @@ kiosk_shell_destroy(struct wl_listener *listener, void *data)
 	free(shell);
 }
 
+/*
+ * Kiosk shell api
+ */
+
+static void
+kiosk_shell_set_state(struct wl_client *client,
+			     struct wl_resource *resource,
+			     uint32_t state_w)
+{
+	struct kiosk_shell *shell = wl_resource_get_user_data(resource);
+
+	bool should_wake = state_w != 0;
+
+	if (shell->awake == should_wake)
+		return;
+
+	shell->awake = should_wake;
+
+	if (should_wake)
+		weston_compositor_wake(shell->compositor);
+	else
+		weston_compositor_sleep(shell->compositor);
+
+	weston_kiosk_shell_send_state_change(resource, should_wake ? 1 : 0);
+}
+
+static void
+kiosk_shell_set_brightness(struct wl_client *client,
+			     struct wl_resource *resource,
+			     uint32_t brightness)
+{
+	struct kiosk_shell *shell = wl_resource_get_user_data(resource);
+
+	struct weston_output *output;
+	long backlight_new = brightness;
+
+	/* TODO: we're limiting to simple use cases, where we assume just
+	 * control on the primary display. We'd have to extend later if we
+	 * ever get support for setting backlights on random desktop LCD
+	 * panels though */
+	output = get_default_output(shell->compositor);
+	if (!output)
+		return;
+
+	if (!output->set_backlight)
+		return;
+
+	if (backlight_new < 5)
+		backlight_new = 5;
+	if (backlight_new > 255)
+		backlight_new = 255;
+
+	weston_log("set brightness %d\n", backlight_new);
+
+	output->backlight_current = backlight_new;
+	output->set_backlight(output, output->backlight_current);
+
+}
+
+static const struct weston_kiosk_shell_interface kiosk_shell_implementation = {
+	kiosk_shell_set_state, kiosk_shell_set_brightness
+};
+
+static void
+unbind_kiosk_shell(struct wl_resource *resource)
+{
+	// struct kiosk_shell *shell = wl_resource_get_user_data(resource);
+
+	weston_log("unbind kiosk_shell\n");
+
+}
+
+static void
+bind_kiosk_shell(struct wl_client *client,
+		   void *data, uint32_t version, uint32_t id)
+{
+	struct kiosk_shell *shell = data;
+	struct wl_resource *resource;
+
+	weston_log("bind kiosk_shell\n");
+
+	resource = wl_resource_create(client, &weston_kiosk_shell_interface,
+				      1, id);
+
+	wl_resource_set_implementation(resource,
+				      &kiosk_shell_implementation,
+				      shell, unbind_kiosk_shell);
+
+	// maybe need to ad the resource??
+	shell->kiosk_shell = resource;
+
+}
+
 WL_EXPORT int
 wet_shell_init(struct weston_compositor *ec,
 	       int *argc, char *argv[])
 {
+	weston_log("start_weston kiosk\n");
+
 	struct kiosk_shell *shell;
 	struct weston_seat *seat;
 	struct weston_output *output;
@@ -1163,10 +1273,15 @@ wet_shell_init(struct weston_compositor *ec,
 	if (!weston_compositor_add_destroy_listener_once(ec,
 							 &shell->destroy_listener,
 							 kiosk_shell_destroy)) {
+		weston_log("weston_compositor_add_destroy_listener_once failed\n");
 		free(shell);
 		return 0;
 	}
 
+	shell->awake = true;
+
+	shell->wake_listener.notify = wake_handler;
+	wl_signal_add(&ec->wake_signal, &shell->wake_listener);
 	shell->transform_listener.notify = transform_handler;
 	wl_signal_add(&ec->transform_signal, &shell->transform_listener);
 
@@ -1190,6 +1305,15 @@ wet_shell_init(struct weston_compositor *ec,
 					       shell);
 	if (!shell->desktop)
 		return -1;
+
+	weston_log("kiosk: desktop started\n");
+
+
+	if (wl_global_create(ec->wl_display,
+			     &weston_kiosk_shell_interface, 1,
+			     shell, bind_kiosk_shell) == NULL) {
+		return -1;
+	}
 
 	wl_list_init(&shell->seat_list);
 	wl_list_for_each(seat, &ec->seat_list, link)
