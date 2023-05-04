@@ -1262,7 +1262,7 @@ kiosk_shell_set_brightness(struct wl_client *client,
 	 * control on the primary display. We'd have to extend later if we
 	 * ever get support for setting backlights on random desktop LCD
 	 * panels though */
-	output = get_default_output(shell->compositor);
+	output = weston_shell_utils_get_default_output(shell->compositor);
 	if (!output)
 		return;
 
