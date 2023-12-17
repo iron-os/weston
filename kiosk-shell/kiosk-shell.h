@@ -32,6 +32,7 @@ struct kiosk_shell {
 	struct weston_compositor *compositor;
 	struct weston_desktop *desktop;
 
+	struct wl_listener wake_listener;
 	struct wl_listener destroy_listener;
 	struct wl_listener output_created_listener;
 	struct wl_listener output_resized_listener;
@@ -45,6 +46,10 @@ struct kiosk_shell {
 
 	struct wl_list output_list;
 	struct wl_list seat_list;
+
+	struct wl_resource *kiosk_shell;
+
+	bool awake;
 
 	const struct weston_xwayland_surface_api *xwayland_surface_api;
 	struct weston_config *config;
