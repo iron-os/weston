@@ -1579,6 +1579,13 @@ bind_kiosk_shell(struct wl_client *client,
 
 }
 
+static void
+screenshot_allow_all(struct wl_listener *l,
+		     struct weston_output_capture_attempt *att)
+{
+	att->authorized = true;
+}
+
 WL_EXPORT int
 wet_shell_init(struct weston_compositor *ec,
 	       int *argc, char *argv[])
@@ -1663,6 +1670,11 @@ wet_shell_init(struct weston_compositor *ec,
 	shell->session_listener.notify = kiosk_shell_notify_session;
 	wl_signal_add(&ec->session_signal, &shell->session_listener);
 	screenshooter_create(ec);
+
+	// allow to make screenshots
+	weston_compositor_add_screenshot_authority(ec,
+						   &shell->screenshot_auth,
+						   screenshot_allow_all);
 
 	kiosk_shell_add_bindings(shell);
 

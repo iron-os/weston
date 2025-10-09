@@ -309,7 +309,8 @@ screenshooter_output_capture(struct screenshooter_output *output)
 
 static void
 screenshot_write_png(const struct buffer_size *buff_size,
-		     struct wl_list *output_list)
+		     struct wl_list *output_list,
+		     const char *filename)
 {
 	pixman_image_t *shot;
 	cairo_surface_t *surface;
@@ -339,12 +340,19 @@ screenshot_write_png(const struct buffer_size *buff_size,
 						      pixman_image_get_height(shot),
 						      pixman_image_get_stride(shot));
 
-	fp = file_create_dated(getenv("XDG_PICTURES_DIR"), "wayland-screenshot-",
-			       ".png", filepath, sizeof(filepath));
-	if (fp) {
-		fclose (fp);
-		cairo_surface_write_to_png(surface, filepath);
+	if (!filename) {
+		fp = file_create_dated(getenv("XDG_PICTURES_DIR"), "wayland-screenshot-",
+				       ".png", filepath, sizeof(filepath));
+
+		if (fp) {
+			filename = filepath;
+			fclose (fp);
+		}
 	}
+
+	if (filename)
+		cairo_surface_write_to_png(surface, filename);
+
 	cairo_surface_destroy(surface);
 	pixman_image_unref(shot);
 }
@@ -390,6 +398,10 @@ main(int argc, char *argv[])
 	struct screenshooter_output *tmp_output;
 	struct buffer_size buff_size = {};
 	struct screenshooter_app app = {};
+	char *filename = NULL;
+
+	if (argc == 2)
+		filename = argv[1];
 
 	wl_list_init(&app.output_list);
 
@@ -434,7 +446,7 @@ main(int argc, char *argv[])
 	if (!app.failed) {
 		if (screenshot_set_buffer_size(&buff_size, &app.output_list) < 0)
 			return -1;
-		screenshot_write_png(&buff_size, &app.output_list);
+		screenshot_write_png(&buff_size, &app.output_list, filename);
 	} else {
 		fprintf(stderr, "Error: screenshot or protocol failure\n");
 	}
