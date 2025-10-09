@@ -398,7 +398,8 @@ screenshooter_output_capture(struct screenshooter_output *output)
 
 static void
 screenshot_write_png(const struct buffer_size *buff_size,
-		     struct wl_list *output_list)
+		     struct wl_list *output_list,
+		     const char *filename)
 {
 	pixman_image_t *shot;
 	cairo_surface_t *surface;
@@ -432,12 +433,19 @@ screenshot_write_png(const struct buffer_size *buff_size,
 						      pixman_image_get_height(shot),
 						      pixman_image_get_stride(shot));
 
-	fp = file_create_dated(getenv("XDG_PICTURES_DIR"), "wayland-screenshot-",
-			       ".png", filepath, sizeof(filepath));
-	if (fp) {
-		fclose (fp);
-		cairo_surface_write_to_png(surface, filepath);
+	if (!filename) {
+		fp = file_create_dated(getenv("XDG_PICTURES_DIR"), "wayland-screenshot-",
+				       ".png", filepath, sizeof(filepath));
+
+		if (fp) {
+			filename = filepath;
+			fclose (fp);
+		}
 	}
+
+	if (filename)
+		cairo_surface_write_to_png(surface, filename);
+
 	cairo_surface_destroy(surface);
 	pixman_image_unref(shot);
 }
@@ -603,6 +611,10 @@ main(int argc, char *argv[])
 	struct buffer_size buff_size = {};
 	struct screenshooter_app app = {};
 	int c, option_index;
+	char *filename = NULL;
+
+	if (argc == 2)
+		filename = argv[1];
 
 	app.src_type = WESTON_CAPTURE_V1_SOURCE_FRAMEBUFFER;
 	app.buffer_type = CLIENT_BUFFER_TYPE_SHM;
@@ -722,10 +734,11 @@ main(int argc, char *argv[])
 		if (screenshot_set_buffer_size(&buff_size, &app.output_list) < 0)
 			return -1;
 
-		if (all_output_formats_are_yuv(&app.output_list))
-			screenshot_write_yuv(&buff_size, &app.output_list);
-		else
-			screenshot_write_png(&buff_size, &app.output_list);
+		// if (all_output_formats_are_yuv(&app.output_list))
+		// 	screenshot_write_yuv(&buff_size, &app.output_list);
+		// else
+		// 	screenshot_write_png(&buff_size, &app.output_list);
+		screenshot_write_png(&buff_size, &app.output_list, filename);
 	} else {
 		fprintf(stderr, "Error: screenshot or protocol failure\n");
 	}
