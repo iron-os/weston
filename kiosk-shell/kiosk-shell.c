@@ -1542,11 +1542,34 @@ kiosk_shell_set_brightness(struct wl_client *client,
 
 	output->backlight_current = backlight_new;
 	output->set_backlight(output, output->backlight_current);
+}
 
+static void
+kiosk_shell_click(struct wl_client *client,
+			     struct wl_resource *resource,
+			     uint32_t x,
+			     uint32_t y)
+{
+	struct kiosk_shell *shell = wl_resource_get_user_data(resource);
+	struct weston_seat *seat = get_kiosk_shell_first_seat(shell);
+	struct timespec time;
+	struct weston_pointer *pointer = weston_seat_get_pointer(seat);
+	// bool
+
+	weston_compositor_get_time(&time);
+
+
+	// weston_seat_init_pointer
+
+	// notify_button(peer->seat, &time, BTN_LEFT,
+	// 	      WL_POINTER_BUTTON_STATE_PRESSED);
+
+	// notify_button(peer->seat, &time, BTN_LEFT,
+	// 	      WL_POINTER_BUTTON_STATE_RELEASED);
 }
 
 static const struct weston_kiosk_shell_interface kiosk_shell_implementation = {
-	kiosk_shell_set_state, kiosk_shell_set_brightness
+	kiosk_shell_set_state, kiosk_shell_set_brightness, kiosk_shell_click
 };
 
 static void
