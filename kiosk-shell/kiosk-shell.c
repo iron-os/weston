@@ -33,6 +33,8 @@
 #include "kiosk-shell-grab.h"
 #include "frontend/weston.h"
 #include "libweston/libweston.h"
+#include "libweston/backend.h"
+#include "libweston/libweston-internal.h"
 #include "weston-kiosk-shell-server-protocol.h"
 #include "shared/helpers.h"
 #include <libweston/shell-utils.h>
@@ -1407,6 +1409,9 @@ kiosk_shell_handle_seat_created(struct wl_listener *listener, void *data)
 	struct weston_seat *seat = data;
 	struct kiosk_shell *shell =
 		container_of(listener, struct kiosk_shell, seat_created_listener);
+	
+	/* Pointer created on-demand in mouse_click() to avoid cursor on touch-only devices */
+	
 	kiosk_shell_seat_create(shell, seat);
 }
 
@@ -1440,6 +1445,12 @@ kiosk_shell_destroy(struct wl_listener *listener, void *data)
 	wl_list_remove(&shell->seat_created_listener.link);
 	wl_list_remove(&shell->transform_listener.link);
 	wl_list_remove(&shell->session_listener.link);
+
+	/* Clean up pending click timer if any */
+	if (shell->pending_click.timer) {
+		wl_event_source_remove(shell->pending_click.timer);
+		shell->pending_click.timer = NULL;
+	}
 
 	wl_list_for_each_safe(shoutput, tmp, &shell->output_list, link) {
 		kiosk_shell_output_destroy(shoutput);
@@ -1520,7 +1531,7 @@ kiosk_shell_set_brightness(struct wl_client *client,
 	struct kiosk_shell *shell = wl_resource_get_user_data(resource);
 
 	struct weston_output *output;
-	long backlight_new = brightness;
+	int32_t backlight_new = brightness;
 
 	/* TODO: we're limiting to simple use cases, where we assume just
 	 * control on the primary display. We'd have to extend later if we
@@ -1545,8 +1556,162 @@ kiosk_shell_set_brightness(struct wl_client *client,
 
 }
 
+/* Clean up pointer if device_count == 1 (no physical devices) */
+static void
+kiosk_shell_cleanup_pointer(struct weston_seat *seat)
+{
+	struct weston_pointer *pointer;
+
+	if (!seat)
+		return;
+
+	pointer = weston_seat_get_pointer(seat);
+	if (pointer && seat->pointer_device_count == 1)
+		weston_seat_release_pointer(seat);
+}
+
+/* Execute mouse click after delay to allow client wl_pointer binding */
+static void
+kiosk_shell_execute_click(struct kiosk_shell *shell, wl_fixed_t x, wl_fixed_t y,
+			  bool cleanup_pointer)
+{
+	struct weston_seat *seat;
+	struct weston_pointer *pointer;
+	struct weston_output *output;
+	struct weston_coord_global pos;
+	struct weston_view *view;
+	struct timespec time;
+	double norm_x, norm_y;
+	double pixel_x, pixel_y;
+
+	seat = get_kiosk_shell_first_seat(shell);
+	if (!seat) {
+		weston_log("execute_click: no seat available\n");
+		goto cleanup;
+	}
+
+	pointer = weston_seat_get_pointer(seat);
+	if (!pointer) {
+		weston_log("execute_click: ERROR - no pointer device\n");
+		goto cleanup;
+	}
+
+	output = weston_shell_utils_get_default_output(shell->compositor);
+	if (!output) {
+		weston_log("execute_click: no output available\n");
+		goto cleanup;
+	}
+
+	norm_x = wl_fixed_to_double(x);
+	norm_y = wl_fixed_to_double(y);
+
+	norm_x = CLIP(norm_x, 0.0, 1.0);
+	norm_y = CLIP(norm_y, 0.0, 1.0);
+
+	pixel_x = norm_x * output->width;
+	pixel_y = norm_y * output->height;
+
+	pos = weston_coord_global_from_output_point(pixel_x, pixel_y, output);
+
+	weston_compositor_get_time(&time);
+
+	notify_motion_absolute(seat, &time, pos);
+
+	view = weston_compositor_pick_view(shell->compositor, pos);
+	if (view) {
+		weston_pointer_set_focus(pointer, view);
+		if (pointer->focus != view)
+			weston_log("execute_click: WARNING - focus mismatch!\n");
+	} else {
+		weston_log("execute_click: WARNING - no view found at position!\n");
+	}
+
+	notify_button(seat, &time, BTN_LEFT, WL_POINTER_BUTTON_STATE_PRESSED);
+	notify_button(seat, &time, BTN_LEFT, WL_POINTER_BUTTON_STATE_RELEASED);
+	notify_pointer_frame(seat);
+
+cleanup:
+	/* Clean up pointer to avoid cursor on touch-only devices */
+	if (cleanup_pointer)
+		kiosk_shell_cleanup_pointer(seat);
+}
+
+/* Timer callback for delayed click execution */
+static int
+kiosk_shell_delayed_click_handler(void *data)
+{
+	struct kiosk_shell *shell = data;
+
+	kiosk_shell_execute_click(shell, shell->pending_click.x,
+				  shell->pending_click.y,
+				  shell->pending_click.pointer_created);
+
+	wl_event_source_remove(shell->pending_click.timer);
+	shell->pending_click.timer = NULL;
+	shell->pending_click.pointer_created = false;
+
+	return 0;
+}
+
+static void
+kiosk_shell_mouse_click(struct wl_client *client,
+			struct wl_resource *resource,
+			wl_fixed_t x, wl_fixed_t y)
+{
+	struct kiosk_shell *shell = wl_resource_get_user_data(resource);
+	struct weston_seat *seat;
+	struct weston_pointer *pointer;
+	struct wl_event_loop *loop;
+	bool need_delay = false;
+
+	seat = get_kiosk_shell_first_seat(shell);
+	if (!seat) {
+		weston_log("mouse_click: no seat available\n");
+		return;
+	}
+
+	/* Ignore click if one is already pending */
+	if (shell->pending_click.timer)
+		return;
+
+	pointer = weston_seat_get_pointer(seat);
+
+	if (!pointer) {
+		/* Create pointer on-demand and delay for client binding */
+		if (weston_seat_init_pointer(seat) < 0) {
+			weston_log("mouse_click: failed to create pointer device\n");
+			return;
+		}
+		shell->pending_click.pointer_created = true;
+		need_delay = true;
+	}
+
+	/* Store click parameters */
+	shell->pending_click.x = x;
+	shell->pending_click.y = y;
+
+	if (need_delay) {
+		/* Schedule 50ms delay for client binding */
+		loop = wl_display_get_event_loop(shell->compositor->wl_display);
+		shell->pending_click.timer = wl_event_loop_add_timer(loop,
+								     kiosk_shell_delayed_click_handler,
+								     shell);
+		if (!shell->pending_click.timer) {
+			weston_log("mouse_click: failed to create timer\n");
+			kiosk_shell_execute_click(shell, x, y, true);
+			return;
+		}
+		wl_event_source_timer_update(shell->pending_click.timer, 50);
+	} else {
+		/* Pointer exists, execute immediately without cleanup */
+		kiosk_shell_execute_click(shell, x, y, false);
+	}
+}
+
 static const struct weston_kiosk_shell_interface kiosk_shell_implementation = {
-	kiosk_shell_set_state, kiosk_shell_set_brightness
+	kiosk_shell_set_state,
+	kiosk_shell_set_brightness,
+	kiosk_shell_mouse_click
 };
 
 static void
@@ -1602,6 +1767,9 @@ wet_shell_init(struct weston_compositor *ec,
 		return -1;
 
 	shell->compositor = ec;
+
+	shell->pending_click.timer = NULL;
+	shell->pending_click.pointer_created = false;
 
 	if (!weston_compositor_add_destroy_listener_once(ec,
 							 &shell->destroy_listener,
