@@ -36,6 +36,8 @@
 #include "weston-kiosk-shell-server-protocol.h"
 #include "shared/helpers.h"
 #include <libweston/shell-utils.h>
+#include "backend.h"
+#include "libweston-internal.h"
 
 #include <libweston/xwayland-api.h>
 
@@ -1545,8 +1547,71 @@ kiosk_shell_set_brightness(struct wl_client *client,
 
 }
 
+static void
+kiosk_shell_mouse_click(struct wl_client *client,
+			struct wl_resource *resource,
+			wl_fixed_t x, wl_fixed_t y)
+{
+	struct kiosk_shell *shell = wl_resource_get_user_data(resource);
+	struct weston_seat *seat;
+	struct weston_pointer *pointer;
+	struct weston_output *output;
+	struct weston_coord_global pos;
+	struct timespec time;
+	bool temporary_pointer = false;
+	double norm_x, norm_y;
+	double pixel_x, pixel_y;
+
+	seat = get_kiosk_shell_first_seat(shell);
+	if (!seat) {
+		weston_log("no seat available\n");
+		return;
+	}
+
+	pointer = weston_seat_get_pointer(seat);
+	if (!pointer) {
+		weston_log("no pointer, creating temporary one\n");
+		if (weston_seat_init_pointer(seat) < 0) {
+			weston_log("failed to create temporary pointer\n");
+			return;
+		}
+		pointer = weston_seat_get_pointer(seat);
+		temporary_pointer = true;
+	}
+
+	output = weston_shell_utils_get_default_output(shell->compositor);
+	if (!output) {
+		weston_log("no output available\n");
+		goto cleanup;
+	}
+
+	norm_x = wl_fixed_to_double(x);
+	norm_y = wl_fixed_to_double(y);
+
+	norm_x = CLIP(norm_x, 0.0, 1.0);
+	norm_y = CLIP(norm_y, 0.0, 1.0);
+
+	pixel_x = norm_x * output->width;
+	pixel_y = norm_y * output->height;
+
+	pos = weston_coord_global_from_output_point(pixel_x, pixel_y, output);
+
+	weston_compositor_get_time(&time);
+
+	notify_motion_absolute(seat, &time, pos);
+	notify_button(seat, &time, BTN_LEFT, WL_POINTER_BUTTON_STATE_PRESSED);
+	notify_button(seat, &time, BTN_LEFT, WL_POINTER_BUTTON_STATE_RELEASED);
+	notify_pointer_frame(seat);
+
+cleanup:
+	if (temporary_pointer)
+		weston_seat_release_pointer(seat);
+}
+
 static const struct weston_kiosk_shell_interface kiosk_shell_implementation = {
-	kiosk_shell_set_state, kiosk_shell_set_brightness
+	kiosk_shell_set_state,
+	kiosk_shell_set_brightness,
+	kiosk_shell_mouse_click
 };
 
 static void
