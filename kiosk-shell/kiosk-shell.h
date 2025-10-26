@@ -55,6 +55,14 @@ struct kiosk_shell {
 	struct weston_config *config;
 	struct wl_listener session_listener;
 	struct wl_listener screenshot_auth;
+
+	/* Delayed mouse click support */
+	struct {
+		struct wl_event_source *timer;
+		wl_fixed_t x;
+		wl_fixed_t y;
+		bool pointer_created;
+	} pending_click;
 };
 
 struct kiosk_shell_surface {
