@@ -623,6 +623,14 @@ weston_capture_source_v1_capture(struct wl_client *client,
 		return;
 	}
 
+	/* Check if output is powered off or compositor is sleeping/offscreen */
+	if (csrc->output->power_state == WESTON_OUTPUT_POWER_FORCED_OFF ||
+	    csrc->output->compositor->state == WESTON_COMPOSITOR_SLEEPING ||
+	    csrc->output->compositor->state == WESTON_COMPOSITOR_OFFSCREEN) {
+		weston_capture_source_v1_send_failed(csrc->resource, "output unavailable");
+		return;
+	}
+
 	/* Is the pixel source not available? */
 	csi = capture_info_get_csi(csrc->output->capture_info,
 				   csrc->pixel_source);
