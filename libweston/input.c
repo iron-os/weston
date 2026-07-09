@@ -1066,6 +1066,13 @@ default_grab_touch_frame(struct weston_touch_grab *grab)
 static void
 default_grab_touch_cancel(struct weston_touch_grab *grab)
 {
+	struct weston_touch *touch = grab->touch;
+
+	/* A cancel means the touch session is over: reset the finger counter
+	 * and drop focus so we don't carry stale bookkeeping (e.g. a leaked
+	 * MT slot from the controller) across to the next session. */
+	touch->num_tp = 0;
+	weston_touch_set_focus(touch, NULL);
 }
 
 static const struct weston_touch_grab_interface default_touch_grab_interface = {
@@ -2876,6 +2883,7 @@ process_touch_normal(struct weston_touch_device *device,
 	struct weston_touch_grab *grab = device->aggregate->grab;
 	struct weston_compositor *ec = device->aggregate->seat->compositor;
 	struct weston_view *ev;
+	bool new_session;
 
 	if (touch_type != WL_TOUCH_UP)
 		assert(pos);
@@ -2888,16 +2896,25 @@ process_touch_normal(struct weston_touch_device *device,
 	case WL_TOUCH_DOWN:
 		/* the first finger down picks the view, and all further go
 		 * to that view for the remainder of the touch session i.e.
-		 * until all touch points are up again. */
-		if (touch->num_tp == 1) {
+		 * until all touch points are up again.
+		 *
+		 * If focus was lost mid-session - the focused surface was
+		 * destroyed, or the controller leaked an MT slot so num_tp
+		 * never drained back to 0 - then num_tp will never be 1 again
+		 * and the old code dropped every DOWN forever. Recover by
+		 * picking a new view whenever there is no focus, and treat
+		 * that as the start of a fresh session for grab bookkeeping. */
+		new_session = touch->num_tp == 1 || !touch->focus;
+		if (new_session) {
 			ev = weston_compositor_pick_view(ec, *pos);
 			weston_touch_set_focus(touch, ev);
-		} else if (!touch->focus) {
-			/* Unexpected condition: We have non-initial touch but
-			 * there is no focused surface.
-			 */
-			weston_log("touch event received with %d points down "
-				   "but no surface focused\n", touch->num_tp);
+		}
+
+		if (!touch->focus) {
+			/* Nothing under the finger to focus (e.g. no view at
+			 * this position) - drop the event. */
+			weston_log("touch DOWN with %d points but no surface "
+				   "to focus\n", touch->num_tp);
 			return;
 		}
 
@@ -2905,7 +2922,7 @@ process_touch_normal(struct weston_touch_device *device,
 						    time, touch_type);
 
 		grab->interface->down(grab, time, touch_id, *pos);
-		if (touch->num_tp == 1) {
+		if (new_session) {
 			touch->grab_serial =
 				wl_display_get_serial(ec->wl_display);
 			touch->grab_touch_id = touch_id;
