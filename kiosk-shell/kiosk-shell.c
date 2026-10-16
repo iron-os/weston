@@ -1582,6 +1582,8 @@ kiosk_shell_execute_click(struct kiosk_shell *shell, wl_fixed_t x, wl_fixed_t y,
 	struct weston_coord_global pos;
 	struct weston_view *view;
 	struct timespec time;
+	struct weston_pointer_motion_event motion;
+	struct weston_pointer_button_event button;
 	double norm_x, norm_y;
 	double pixel_x, pixel_y;
 
@@ -1616,7 +1618,10 @@ kiosk_shell_execute_click(struct kiosk_shell *shell, wl_fixed_t x, wl_fixed_t y,
 
 	weston_compositor_get_time(&time);
 
-	notify_motion_absolute(seat, &time, pos);
+	weston_pointer_motion_event_init(&motion, &time, seat,
+					 WESTON_POINTER_MOTION_ABS,
+					 &pos, NULL, NULL);
+	notify_motion(&motion);
 
 	view = weston_compositor_pick_view(shell->compositor, pos);
 	if (view) {
@@ -1627,8 +1632,12 @@ kiosk_shell_execute_click(struct kiosk_shell *shell, wl_fixed_t x, wl_fixed_t y,
 		weston_log("execute_click: WARNING - no view found at position!\n");
 	}
 
-	notify_button(seat, &time, BTN_LEFT, WL_POINTER_BUTTON_STATE_PRESSED);
-	notify_button(seat, &time, BTN_LEFT, WL_POINTER_BUTTON_STATE_RELEASED);
+	weston_pointer_button_event_init(&button, &time, seat, BTN_LEFT,
+					 WL_POINTER_BUTTON_STATE_PRESSED);
+	notify_button(&button);
+	weston_pointer_button_event_init(&button, &time, seat, BTN_LEFT,
+					 WL_POINTER_BUTTON_STATE_RELEASED);
+	notify_button(&button);
 	notify_pointer_frame(seat);
 
 cleanup:
