@@ -6295,6 +6295,7 @@ weston_compositor_sleep(struct weston_compositor *compositor)
 	if (compositor->state == WESTON_COMPOSITOR_SLEEPING)
 		return;
 
+	weston_compositor_cancel_touch(compositor);
 	wl_event_source_timer_update(compositor->idle_source, 0);
 	compositor->state = WESTON_COMPOSITOR_SLEEPING;
 	weston_compositor_dpms(compositor, WESTON_DPMS_OFF);

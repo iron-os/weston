@@ -450,6 +450,9 @@ weston_seat_release_pointer(struct weston_seat *seat);
 void
 weston_seat_release_touch(struct weston_seat *seat);
 
+void
+weston_compositor_cancel_touch(struct weston_compositor *compositor);
+
 struct weston_tablet *
 weston_seat_add_tablet(struct weston_seat *seat);
 struct weston_tablet_tool *

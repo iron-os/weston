@@ -1144,6 +1144,26 @@ default_grab_touch_frame(struct weston_touch_grab *grab)
 static void
 default_grab_touch_cancel(struct weston_touch_grab *grab)
 {
+	struct weston_touch *touch = grab->touch;
+	struct wl_resource *resource;
+
+	/* A cancel ends the touch session: tell the client, balance the idle
+	 * inhibits taken per finger and forget the fingers, so no stale
+	 * bookkeeping (e.g. a slot the controller never released) survives. */
+	if (touch->num_tp > 0)
+		weston_log("touch-recovery: cancel with %d points down\n",
+			   touch->num_tp);
+
+	if (weston_touch_has_focus_resource(touch)) {
+		wl_resource_for_each(resource, &touch->focus_resource_list)
+			wl_touch_send_cancel(resource);
+	}
+
+	while (touch->num_tp > 0) {
+		weston_compositor_idle_release(touch->seat->compositor);
+		touch->num_tp--;
+	}
+	weston_touch_set_focus(touch, NULL);
 }
 
 static const struct weston_touch_grab_interface default_touch_grab_interface = {
@@ -2956,6 +2976,7 @@ process_touch_normal(const struct weston_touch_device *device,
 	struct weston_touch_grab *grab = device->aggregate->grab;
 	struct weston_compositor *ec = device->aggregate->seat->compositor;
 	struct weston_view *ev;
+	bool new_session;
 
 	/* Update grab's global coordinates. */
 	if (event->touch_id == touch->grab_touch_id && event->touch_type != WL_TOUCH_UP)
@@ -2966,16 +2987,24 @@ process_touch_normal(const struct weston_touch_device *device,
 		/* the first finger down picks the view, and all further go
 		 * to that view for the remainder of the touch session i.e.
 		 * until all touch points are up again. */
-		if (touch->num_tp == 1) {
+		new_session = touch->num_tp == 1;
+		if (!new_session && !touch->focus) {
+			/* We have a non-initial touch but no focused surface:
+			 * the focused surface went away mid-session or the
+			 * controller never released a finger, so num_tp will
+			 * not drain back to 1. Start a new session on this
+			 * touch instead of dropping every touch from now on. */
+			weston_log("touch-recovery: down with %d points but no "
+				   "surface focused, starting a new session\n",
+				   touch->num_tp);
+			new_session = true;
+		}
+
+		if (new_session) {
 			ev = weston_compositor_pick_view(ec, event->pos);
 			weston_touch_set_focus(touch, ev);
-		} else if (!touch->focus) {
-			/* Unexpected condition: We have non-initial touch but
-			 * there is no focused surface.
-			 */
-			weston_log("touch event received with %d points down "
-				   "but no surface focused\n", touch->num_tp);
-			return;
+			if (!touch->focus)
+				return;
 		}
 
 		weston_compositor_run_touch_binding(ec, touch,
@@ -2983,7 +3012,7 @@ process_touch_normal(const struct weston_touch_device *device,
 						    event->touch_type);
 
 		grab->interface->down(grab, event);
-		if (touch->num_tp == 1) {
+		if (new_session) {
 			touch->grab_serial =
 				wl_display_get_serial(ec->wl_display);
 			touch->grab_touch_id = event->touch_id;
@@ -4364,6 +4393,22 @@ weston_seat_add_tablet_tool(struct weston_seat *seat)
 	tool->seat = seat;
 
 	return tool;
+}
+
+/** Cancel the touch session of every seat
+ *
+ * Used when the compositor goes to sleep, so touches that are still down
+ * (or stuck) do not carry over to the next wake.
+ */
+WL_EXPORT void
+weston_compositor_cancel_touch(struct weston_compositor *compositor)
+{
+	struct weston_seat *seat;
+
+	wl_list_for_each(seat, &compositor->seat_list, link) {
+		if (seat->touch_state)
+			weston_touch_cancel_grab(seat->touch_state);
+	}
 }
 
 WL_EXPORT void
