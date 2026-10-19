@@ -1158,6 +1158,15 @@ drm_output_propose_state_try_reuse(struct weston_output *output_base,
 		return NULL;
 	}
 
+	/* Turning the output off replaces the state with one without any
+	 * planes, while the paint nodes keep their old planes. Reusing
+	 * that state on wake-up would leave those nodes without a plane
+	 * state, so rebuild it from scratch instead. */
+	if (output->state_cur->dpms != WESTON_DPMS_ON) {
+		debug_propose_fail(output, mode, "output was off");
+		return NULL;
+	}
+
 	if (output_base->paint_node_changes & ~WESTON_PAINT_NODE_BUFFER_DIRTY) {
 		debug_propose_fail(output, mode, "state is outdated");
 		return NULL;
@@ -1190,7 +1199,11 @@ drm_output_propose_state_try_reuse(struct weston_output *output_base,
 		}
 		plane = (struct drm_plane *) pnode->plane;
 		pstate = drm_output_state_get_existing_plane(state, plane);
-		weston_assert_ptr_not_null(compositor, pstate);
+		if (!pstate) {
+			debug_propose_fail(output, mode, "paint node plane not in prior state");
+			drm_output_state_free(state);
+			return NULL;
+		}
 		pstate->paint_node = pnode;
 
 		/* cursor is handled out of band */
